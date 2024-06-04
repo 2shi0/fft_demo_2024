@@ -26,7 +26,10 @@ uint16_t *adc_buffer = NULL;
 
 ArduinoFFT<float> FFT = ArduinoFFT<float>(v_real, v_imag, samples, sampling_frequency); /* Create FFT object */
 
-void fft() {
+float hz_tmp;
+float db_tmp;
+
+float fft() {
   for (int i = 0; i < samples; i++) {
     unsigned long t = micros();
     v_real[i] = adc_buffer[i];
@@ -38,11 +41,7 @@ void fft() {
   FFT.windowing(FFTWindow::Hamming, FFTDirection::Forward); /* Weigh data */
   FFT.compute(FFTDirection::Forward);                       /* Compute FFT */
   FFT.complexToMagnitude();                                 /* Compute magnitudes */
-  float x = FFT.majorPeak();
-  Serial.print(x);
-  Serial.print(" Hz | ");
-  Serial.print(get_loudness());
-  Serial.println(" dB?");
+  return FFT.majorPeak();
 
   /*
   for (int band = 0; band < nsamples; band++) {
@@ -69,7 +68,7 @@ void fft() {
 const int read_len = 2 * samples;
 uint8_t buffer[read_len] = { 0 };
 
-void i2sInit() {
+void i2s_init() {
   i2s_config_t i2s_config = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM),
     .sample_rate = 44100,
@@ -107,14 +106,15 @@ void mic_record_task(void *arg) {
   while (1) {
     i2s_read(I2S_NUM_0, (char *)buffer, read_len, &bytesread, (100 / portTICK_RATE_MS));
     adc_buffer = (uint16_t *)buffer;
-    fft();
+    hz_tmp = fft();
+    db_tmp = get_loudness();
     vTaskDelay(100 / portTICK_RATE_MS);
   }
 }
 
 //=====================================
 // Measuring Sound Loudness
-// (WIP)
+// made in 俺
 //=====================================
 float get_loudness() {
   int sum = 0;
@@ -125,10 +125,87 @@ float get_loudness() {
 }
 
 //=====================================
+// Siren detection
+// made in 俺
+//=====================================
+const uint8_t db_th = 75;     //うるささがこれ以下なら無視（最大値は多分127）
+const uint8_t max_oldy = 10;  // 過去nサイクル以内に救急車っぽい音があったら保持
+uint8_t oldy = 0;
+const uint16_t siren_freq[2] = { 960, 770 };  //救急車のサイレン周波数
+const uint16_t freq_th = 30;                  //上記周波数から±nの誤差を許容
+const uint8_t max_stuck = 5;                  //n回連続でサイレン周波数を検知したらサイレンがなっていると考える
+uint8_t stuck = 0;
+
+bool siren_detect(float db, float hz) {
+  Serial.print(db);
+  Serial.print(" dB? | ");
+  if (db > db_th)
+    Serial.print(hz);
+  else
+    Serial.print("-");
+  Serial.println(" Hz");
+
+  Serial.print("oldy:");
+  Serial.print(oldy);
+  Serial.print(" | stuck:");
+  Serial.println(stuck);
+
+  if (db < db_th && oldy < 1) return 0;
+
+  for (int i = 0; i < sizeof(siren_freq) / sizeof(siren_freq[0]); i++) {
+    if (hz > siren_freq[i] - freq_th && hz < siren_freq[i] + freq_th) {
+      if (stuck < max_stuck) {
+        stuck++;
+        return 0;
+      } else {
+        oldy = max_oldy;
+        return 1;
+      }
+    }
+  }
+  if (stuck > 0) stuck--;
+  if (oldy > 0) {
+    oldy--;
+    return 1;
+  } else {
+    return 0;
+  }
+}
+
+//=====================================
 // tft screen
 // referenced from https://lawn-tech.jp/m5stickc_sprite.html
 //=====================================
+TFT_eSprite sprite(&M5.Lcd);
+void tft_init() {
+  M5.begin();
+  M5.Lcd.setRotation(1);
 
+  sprite.createSprite(M5.Lcd.width(), M5.Lcd.height());
+  sprite.setTextFont(4);
+}
+
+void tft_draw(float db, float hz) {
+  sprite.fillRect(0, 0, M5.Lcd.width(), M5.Lcd.height(), BLUE);
+  sprite.setTextColor(WHITE);
+  sprite.setCursor(0, 0);
+  /*
+  sprite.print(db);
+  sprite.println(" dB");
+  sprite.print(hz);
+  sprite.println(" Hz");
+  */
+  sprite.printf("%.0f dB\n", db);
+  if (db > 75) {
+    sprite.printf("%.0f Hz", hz);
+  } else {
+    sprite.printf("- Hz");
+  }
+
+  sprite.pushSprite(0, 0);
+
+  if (siren_detect(db, hz)) Serial.println("DETECTED!");
+}
 //=====================================
 // main code
 //=====================================
@@ -136,13 +213,15 @@ void setup() {
 
   Serial.begin(115200);
 
-  i2sInit();
+  i2s_init();
   xTaskCreatePinnedToCore(mic_record_task, "mic_record_task", 2048, NULL, 1, NULL, 1);
+
+  tft_init();
 }
 
 void loop() {
-  printf("loop cycling\n");
+  tft_draw(db_tmp, hz_tmp);
 
-  vTaskDelay(1000 / portTICK_RATE_MS);  // otherwise the main task wastes half
-                                        // of the cpu cycles
+  vTaskDelay(10 / portTICK_RATE_MS);  // otherwise the main task wastes half
+                                      // of the cpu cycles
 }
