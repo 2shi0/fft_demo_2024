@@ -133,10 +133,9 @@ const uint8_t max_oldy = 10;  // 過去nサイクル以内に救急車っぽい�
 uint8_t oldy = 0;
 const uint16_t siren_freq[2] = { 960, 770 };  //救急車のサイレン周波数
 const uint16_t freq_th = 30;                  //上記周波数から±nの誤差を許容
-const uint8_t max_stuck = 5;                  //n回連続でサイレン周波数を検知したらサイレンがなっていると考える
-uint8_t stuck = 0;
 
 bool siren_detect(float db, float hz) {
+  /*
   Serial.print(db);
   Serial.print(" dB? | ");
   if (db > db_th)
@@ -149,21 +148,16 @@ bool siren_detect(float db, float hz) {
   Serial.print(oldy);
   Serial.print(" | stuck:");
   Serial.println(stuck);
+  */
 
   if (db < db_th && oldy < 1) return 0;
 
   for (int i = 0; i < sizeof(siren_freq) / sizeof(siren_freq[0]); i++) {
     if (hz > siren_freq[i] - freq_th && hz < siren_freq[i] + freq_th) {
-      if (stuck < max_stuck) {
-        stuck++;
-        return 0;
-      } else {
-        oldy = max_oldy;
-        return 1;
-      }
+      oldy = max_oldy;
+      return 1;
     }
   }
-  if (stuck > 0) stuck--;
   if (oldy > 0) {
     oldy--;
     return 1;
@@ -182,29 +176,34 @@ void tft_init() {
   M5.Lcd.setRotation(1);
 
   sprite.createSprite(M5.Lcd.width(), M5.Lcd.height());
-  sprite.setTextFont(4);
 }
 
 void tft_draw(float db, float hz) {
-  sprite.fillRect(0, 0, M5.Lcd.width(), M5.Lcd.height(), BLUE);
-  sprite.setTextColor(WHITE);
-  sprite.setCursor(0, 0);
-  /*
+  if (siren_detect(db, hz)) {
+    sprite.fillRect(0, 0, M5.Lcd.width(), M5.Lcd.height(), RED);
+    sprite.setTextColor(WHITE);
+    sprite.setTextFont(4);
+    sprite.setCursor(0, 0);
+    sprite.printf("Detected");
+  } else {
+    sprite.fillRect(0, 0, M5.Lcd.width(), M5.Lcd.height(), BLUE);
+    sprite.setTextColor(WHITE);
+    sprite.setTextFont(4);
+    sprite.setCursor(0, 0);
+    /*
   sprite.print(db);
   sprite.println(" dB");
   sprite.print(hz);
   sprite.println(" Hz");
   */
-  sprite.printf("%.0f dB\n", db);
-  if (db > 75) {
-    sprite.printf("%.0f Hz", hz);
-  } else {
-    sprite.printf("- Hz");
+    sprite.printf("%.0f dB\n", db);
+    if (db > 75) {
+      sprite.printf("%.0f Hz", hz);
+    } else {
+      sprite.printf("- Hz");
+    }
   }
-
   sprite.pushSprite(0, 0);
-
-  if (siren_detect(db, hz)) Serial.println("DETECTED!");
 }
 //=====================================
 // main code
